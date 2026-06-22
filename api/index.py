@@ -75,7 +75,7 @@ class QueryResponse(BaseModel):
     source_chunks: List[str]
 
 class GeminiEmbeddings:
-    def __init__(self, model="text-embedding-004"):
+    def __init__(self, model="embedding-001"):   # <-- changed default
         genai.configure(api_key=GOOGLE_API_KEY)
         self.model = model
 
@@ -145,7 +145,7 @@ def process_document(file_path: str, ext: str):
         GLOBAL_STATE["all_chunks"] = [chunk.page_content for chunk in chunks]
 
         # ---- Use custom embeddings ----
-        embeddings = GeminiEmbeddings(model="text-embedding-004")
+        embeddings = GeminiEmbeddings(model="embedding-001")
         # ---------------------------------
 
         vectorstore = FAISS.from_documents(chunks, embeddings)
