@@ -28,6 +28,8 @@ MAX_TOKENS = 1024
 TOP_K = 6
 PROMPT_CACHE_MAX_SIZE = 100
 
+os.environ["GOOGLE_API_VERSION"] = "v1"   # <-- force v1 endpoint
+
 # ── Environment ──────────────────────────────────────────────────────────────
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 if not GOOGLE_API_KEY:
@@ -73,6 +75,30 @@ class QueryRequest(BaseModel):
 class QueryResponse(BaseModel):
     answer: str
     source_chunks: List[str]
+
+class GeminiEmbeddings:
+    def __init__(self, model="text-embedding-004"):
+        genai.configure(api_key=GOOGLE_API_KEY)
+        self.model = model
+
+    def embed_documents(self, texts):
+        result = []
+        for text in texts:
+            response = genai.embed_content(
+                model=f"models/{self.model}",   # keep "models/" prefix
+                content=text,
+                task_type="retrieval_document"
+            )
+            result.append(response['embedding'])
+        return result
+
+    def embed_query(self, text):
+        response = genai.embed_content(
+            model=f"models/{self.model}",
+            content=text,
+            task_type="retrieval_query"
+        )
+        return response['embedding']
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 def compute_hash(b: bytes) -> str:
@@ -148,7 +174,7 @@ def process_document(file_path: str, ext: str):
                     logger.error(f"Query embedding error: {str(e)}")
                     raise
         
-        embeddings = CustomEmbeddings(GOOGLE_API_KEY)
+        embeddings = GeminiEmbeddings(model="text-embedding-004")
         # ---------------------------------------------------------------
 
         vectorstore = FAISS.from_documents(chunks, embeddings)
@@ -266,15 +292,13 @@ async def health():
     return {"status": "ok", "file_indexed": GLOBAL_STATE["filename"] is not None}
 
 # ── Test endpoint ─────────────────────────────────────────────────────────────
-@app.get("/test-embedding")
-async def test_embedding():
+@app.get("/list-models")
+async def list_models():
     try:
         genai.configure(api_key=GOOGLE_API_KEY)
-        response = genai.embed_content(
-            model="models/embedding-001",
-            content="Hello world",
-            task_type="retrieval_document"
-        )
-        return {"status": "success", "length": len(response['embedding'])}
+        models = genai.list_models()
+        # Filter for embedding models
+        embedding_models = [m.name for m in models if "embed" in m.name]
+        return {"available_embedding_models": embedding_models}
     except Exception as e:
-        return {"status": "error", "detail": str(e)}
+        return {"error": str(e)}
