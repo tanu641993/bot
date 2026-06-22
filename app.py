@@ -19,7 +19,9 @@ CHUNK_OVERLAP = 50
 MAX_TOKENS    = 1024
 TOP_K         = 6
 
+# Look at the left margin - it must have ZERO spaces before it!
 app = FastAPI(title="Gemini RAG Data API", version="1.0")
+
 
 # ── Check Environment Variables ───────────────────────────────────────────────
 if not os.environ.get("GOOGLE_API_KEY"):
