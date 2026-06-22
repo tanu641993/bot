@@ -124,7 +124,6 @@ def llm_invoke(prompt: str) -> str:
     return result
 
 def process_document(file_path: str, ext: str):
-    """Parse, chunk, embed, and store in global state."""
     logger.info(f"Processing {file_path} with extension {ext}")
     try:
         if ext == ".csv":
@@ -143,10 +142,12 @@ def process_document(file_path: str, ext: str):
         chunks = text_splitter.split_documents(docs)
         logger.info(f"Split into {len(chunks)} chunks")
 
-        # Store all chunk texts for summarization
         GLOBAL_STATE["all_chunks"] = [chunk.page_content for chunk in chunks]
 
+        # ---- Use custom embeddings ----
         embeddings = GeminiEmbeddings(model="text-embedding-004")
+        # ---------------------------------
+
         vectorstore = FAISS.from_documents(chunks, embeddings)
         GLOBAL_STATE["retriever"] = vectorstore.as_retriever(search_kwargs={"k": TOP_K})
         GLOBAL_STATE["file_hash"] = compute_hash(open(file_path, "rb").read())
