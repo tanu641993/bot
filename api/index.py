@@ -118,7 +118,7 @@ def process_document(file_path: str, ext: str):
         # Store all chunk texts for summarization
         GLOBAL_STATE["all_chunks"] = [chunk.page_content for chunk in chunks]
 
-        embeddings = GoogleGenerativeAIEmbeddings(model="text-embedding-004")
+        embeddings = GoogleGenerativeAIEmbeddings(model="embedding-001")
         vectorstore = FAISS.from_documents(chunks, embeddings)
         GLOBAL_STATE["retriever"] = vectorstore.as_retriever(search_kwargs={"k": TOP_K})
         GLOBAL_STATE["file_hash"] = compute_hash(open(file_path, "rb").read())
