@@ -1,6 +1,0 @@
-{
-  "devCommand": "uvicorn app:app --reload",
-  "rewrites": [
-    { "source": "/(.*)", "destination": "app.py" }
-  ]
-}
