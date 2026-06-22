@@ -1,15 +1,15 @@
-import base64
 import hashlib
-import json
+import os
 import re
 import tempfile
-import os
-
+from typing import List, Optional
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, BackgroundTasks
+from pydantic import BaseModel
 import pandas as pd
-import streamlit as st
+
 from langchain_community.document_loaders import CSVLoader, PyPDFLoader
 from langchain_community.vectorstores import FAISS  
-from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI # Swapped to Gemini
+from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 # ── Configuration ──────────────────────────────────────────────────────────────
@@ -18,36 +18,39 @@ CHUNK_OVERLAP = 50
 MAX_TOKENS    = 1024
 TOP_K         = 6
 
-st.set_page_config(page_title="Gemini RAG Data Chatbot", page_icon="🧠", layout="wide")
-st.title("📊 CSV / Excel / PDF Chatbot with Google Gemini")
-st.write("Upload a file, then ask questions. Type **show dashboard** to build an exportable HTML dashboard.")
+app = FastAPI(title="Gemini RAG Data API", version="1.0")
 
-# Fallback checking for Gemini Environment Variable on Vercel
+# ── Check Environment Variables ───────────────────────────────────────────────
 if not os.environ.get("GOOGLE_API_KEY"):
-    st.warning("Please configure your GOOGLE_API_KEY in Vercel's Environment Variables dashboard.")
+    raise ValueError("Missing GOOGLE_API_KEY environment variable.")
 
-# ── Session state ──────────────────────────────────────────────────────────────
-for key, default in [
-    ("chat_history", []),
-    ("file_hash",    None),
-    ("retriever",    None),
-    ("prompt_cache", {}),
-    ("pdf_path",     None),
-    ("df",           None),
-    ("pdf_text",     None),
-    ("file_ext",     None),
-    ("dashboard_html", None),
-]:
-    if key not in st.session_state:
-        st.session_state[key] = default
+# ── In-Memory Global State (Simulating Session State / Cache) ─────────────────
+# Note: For production with multiple users, replace these with Redis or DB storage.
+GLOBAL_STATE = {
+    "file_hash": None,
+    "retriever": None,
+    "prompt_cache": {},
+}
 
-if "llm" not in st.session_state:
-    # Uses Gemini 1.5 Flash (fast, smart, and includes a generous free tier)
-    st.session_state.llm = ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash",
-        temperature=0.0,
-        max_output_tokens=MAX_TOKENS,
-    )
+# Initialize Gemini LLM
+llm = ChatGoogleGenerativeAI(
+    model="gemini-1.5-flash",
+    temperature=0.0,
+    max_output_tokens=MAX_TOKENS,
+)
+
+# ── Pydantic Schemas ──────────────────────────────────────────────────────────
+class ChatMessage(BaseModel):
+    user: str
+    assistant: str
+
+class QueryRequest(BaseModel):
+    question: str
+    chat_history: Optional[List[ChatMessage]] = []
+
+class QueryResponse(BaseModel):
+    answer: str
+    source_chunks: List[str]
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 def compute_hash(b: bytes) -> str:
@@ -56,56 +59,101 @@ def compute_hash(b: bytes) -> str:
 def prompt_hash(p: str) -> str:
     return hashlib.md5(p.encode()).hexdigest()
 
-def get_cache(p):
-    return st.session_state.prompt_cache.get(prompt_hash(p))
-
-def set_cache(p, v):
-    st.session_state.prompt_cache[prompt_hash(p)] = v
-
 def strip_think_tags(text: str) -> str:
     return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
 def llm_invoke(prompt: str) -> str:
-    cached = get_cache(prompt)
-    if cached:
-        return cached
-    raw = st.session_state.llm.invoke(prompt)
+    p_hash = prompt_hash(prompt)
+    if p_hash in GLOBAL_STATE["prompt_cache"]:
+        return GLOBAL_STATE["prompt_cache"][p_hash]
+    
+    raw = llm.invoke(prompt)
     result = strip_think_tags(str(raw.content))
-    set_cache(prompt, result)
+    GLOBAL_STATE["prompt_cache"][p_hash] = result
     return result
 
-# ── RAG builders (Using Free Gemini Embeddings) ──────────────────────────────────
-@st.cache_resource
-def build_retriever_csv(file_path: str):
-    docs   = CSVLoader(file_path=file_path).load()
+def clean_temp_file(path: str):
+    """Safely removes temporary uploaded files."""
+    try:
+        if os.path.exists(path):
+            os.remove(path)
+    except Exception:
+        pass
+
+# ── Vector Engine Processing ──────────────────────────────────────────────────
+def process_document(file_path: str, ext: str):
+    """Parses document chunks and builds the FAISS index."""
+    if ext == ".csv":
+        docs = CSVLoader(file_path=file_path).load()
+    elif ext == ".pdf":
+        docs = PyPDFLoader(file_path=file_path).load()
+    else:
+        raise HTTPException(status_code=400, detail="Unsupported file format.")
+
     chunks = RecursiveCharacterTextSplitter(
         chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP
     ).split_documents(docs)
-    # Native Gemini text embeddings
-    vs = FAISS.from_documents(chunks, GoogleGenerativeAIEmbeddings(model="models/text-embedding-004"))
-    return vs.as_retriever(search_kwargs={"k": TOP_K})
+    
+    embeddings = GoogleGenerativeAIEmbeddings(model="models/text-embedding-004")
+    vs = FAISS.from_documents(chunks, embeddings)
+    GLOBAL_STATE["retriever"] = vs.as_retriever(search_kwargs={"k": TOP_K})
 
-@st.cache_resource
-def build_retriever_pdf(file_path: str):
-    docs   = PyPDFLoader(file_path).load()
-    chunks = RecursiveCharacterTextSplitter(
-        chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP
-    ).split_documents(docs)
-    vs = FAISS.from_documents(chunks, GoogleGenerativeAIEmbeddings(model="models/text-embedding-004"))
-    return vs.as_retriever(search_kwargs={"k": TOP_K})
+# ── API Endpoints ──────────────────────────────────────────────────────────────
 
-# ── Core RAG query ─────────────────────────────────────────────────────────────
-def run_rag_query(question: str) -> tuple[str, list]:
-    docs = st.session_state.retriever.get_relevant_documents(question)
+@app.post("/upload")
+async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+    """Uploads file, validates extensions, and runs asynchronous vector creation."""
+    contents = await file.read()
+    current_hash = compute_hash(contents)
+    
+    # Avoid rebuilding index if it's the exact same file
+    if GLOBAL_STATE["file_hash"] == current_hash and GLOBAL_STATE["retriever"] is not None:
+        return {"message": "File already uploaded and indexed.", "file_hash": current_hash}
+    
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in [".csv", ".pdf"]:
+        raise HTTPException(status_code=400, detail="Only CSV and PDF files are supported.")
+
+    # Save to safe temporary directory
+    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+        tmp.write(contents)
+        tmp_path = tmp.name
+
+    try:
+        process_document(tmp_path, ext)
+        GLOBAL_STATE["file_hash"] = current_hash
+        # Cleanup file after processing
+        background_tasks.add_task(clean_temp_file, tmp_path)
+    except Exception as e:
+        background_tasks.add_task(clean_temp_file, tmp_path)
+        raise HTTPException(status_code=500, detail=f"Failed to index document: {str(e)}")
+
+    return {"message": f"Successfully indexed {file.filename}", "file_hash": current_hash}
+
+
+@app.post("/query", response_model=QueryResponse)
+async def query_rag(request: QueryRequest):
+    """Executes RAG pipeline against the active document context."""
+    if not GLOBAL_STATE["retriever"]:
+        raise HTTPException(status_code=400, detail="No active document. Please upload a file first.")
+
+    # Fetch context documents
+    docs = GLOBAL_STATE["retriever"].get_relevant_documents(request.question)
     if not docs:
-        return "I could not find relevant information in the uploaded document.", []
+        return QueryResponse(
+            answer="I could not find relevant information in the uploaded document.", 
+            source_chunks=[]
+        )
 
+    # Format retrieved document context
     context = "\n\n---\n\n".join(
         f"[Chunk {i+1}]\n{d.page_content}" for i, d in enumerate(docs)
     )
+    
+    # Format chat history array (limiting to the last 4 elements)
     history = "\n".join(
-        f"User: {h['user']}\nAssistant: {h['assistant']}"
-        for h in st.session_state.chat_history[-4:]
+        f"User: {h.user}\nAssistant: {h.assistant}"
+        for h in request.chat_history[-4:]
     ) or "None"
 
     prompt = f"""You are a helpful assistant that answers questions strictly from the provided document context.
@@ -128,6 +176,15 @@ Question: {question}
 Answer:"""
 
     answer = llm_invoke(prompt)
-    return answer, docs
+    source_chunks = [d.page_content for d in docs]
+    
+    return QueryResponse(answer=answer, source_chunks=source_chunks)
 
-# [Rest of your Pandas logic and dashboard generation remains identical]
+
+@app.post("/reset")
+async def reset_state():
+    """Wipes memory session cache."""
+    GLOBAL_STATE["file_hash"] = None
+    GLOBAL_STATE["retriever"] = None
+    GLOBAL_STATE["prompt_cache"] = {}
+    return {"message": "State reset successfully."}
