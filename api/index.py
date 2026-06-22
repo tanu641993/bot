@@ -77,7 +77,7 @@ class QueryResponse(BaseModel):
     source_chunks: List[str]
 
 class GeminiEmbeddings:
-    def __init__(self, model="text-embedding-004"):
+    def __init__(self, model="gemini-embedding-2"):
         genai.configure(api_key=GOOGLE_API_KEY)
         self.model = model
 
@@ -174,7 +174,7 @@ def process_document(file_path: str, ext: str):
                     logger.error(f"Query embedding error: {str(e)}")
                     raise
         
-        embeddings = GeminiEmbeddings(model="text-embedding-004")
+        embeddings = GeminiEmbeddings(model="gemini-embedding-2")
         # ---------------------------------------------------------------
 
         vectorstore = FAISS.from_documents(chunks, embeddings)
