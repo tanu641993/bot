@@ -286,7 +286,8 @@ async def list_generative_models():
     try:
         client = genai.Client(api_key=GOOGLE_API_KEY, http_options={'api_version': 'v1'})
         models = client.models.list()
-        generative = [m.name for m in models if "generateContent" in m.supported_methods]
-        return {"generative_models": generative}
+        # Just return all model names, let the user pick
+        model_names = [m.name for m in models]
+        return {"all_models": model_names}
     except Exception as e:
         return {"error": str(e)}
