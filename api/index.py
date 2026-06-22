@@ -1,5 +1,6 @@
 import os
-os.environ["GOOGLE_API_VERSION"] = "v1"   # force v1 API (still needed for the old client, but we're moving to new one)
+os.environ["GOOGLE_API_VERSION"] = "v1"
+os.environ["GOOGLE_API_ENDPOINT"] = "https://generativelanguage.googleapis.com/v1/"
 
 import hashlib
 import logging
@@ -51,8 +52,11 @@ GLOBAL_STATE = {
 
 # ── Custom Gemini Embeddings (using google.genai) ─────────────────────────────
 class GeminiEmbeddings:
-    def __init__(self, model="gemini-embedding-2"):   # one of the available models
-        self.client = genai.Client(api_key=GOOGLE_API_KEY)
+    def __init__(self, model="gemini-embedding-2"):
+        self.client = genai.Client(
+            api_key=GOOGLE_API_KEY,
+            http_options={'api_version': 'v1'}
+        )
         self.model = model
 
     def embed_documents(self, texts):
@@ -77,7 +81,10 @@ class GeminiEmbeddings:
 # ── Custom Gemini Chat (using google.genai) ─────────────────────────────────
 class ChatGemini:
     def __init__(self, model="gemini-1.5-flash", temperature=0.0, max_output_tokens=1024):
-        self.client = genai.Client(api_key=GOOGLE_API_KEY)
+        self.client = genai.Client(
+            api_key=GOOGLE_API_KEY,
+            http_options={'api_version': 'v1'}   # force v1
+        )
         self.model = model
         self.temperature = temperature
         self.max_output_tokens = max_output_tokens
@@ -273,3 +280,13 @@ async def reset_state():
 @app.get("/health")
 async def health():
     return {"status": "ok", "file_indexed": GLOBAL_STATE["filename"] is not None}
+
+@app.get("/list-generative-models")
+async def list_generative_models():
+    try:
+        client = genai.Client(api_key=GOOGLE_API_KEY, http_options={'api_version': 'v1'})
+        models = client.models.list()
+        generative = [m.name for m in models if "generateContent" in m.supported_methods]
+        return {"generative_models": generative}
+    except Exception as e:
+        return {"error": str(e)}

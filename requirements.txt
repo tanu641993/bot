@@ -9,3 +9,5 @@ faiss-cpu>=1.8.0
 python-multipart>=0.0.9
 google-genai>=0.2.0        # <-- new SDK
 langchain-text-splitters
+google-genai>=0.2.0
+# ... other packages (no langchain-google-genai)
