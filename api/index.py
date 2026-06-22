@@ -1,9 +1,8 @@
+import os
+os.environ["GOOGLE_API_VERSION"] = "v1"   # force v1 API (still needed for the old client, but we're moving to new one)
+
 import hashlib
 import logging
-import os
-
-os.environ["GOOGLE_API_VERSION"] = "v1"   # <-- force v1 endpoint
-
 import re
 import tempfile
 from pathlib import Path
@@ -15,12 +14,11 @@ from pydantic import BaseModel
 
 from langchain_community.document_loaders import CSVLoader, PyPDFLoader
 from langchain_community.vectorstores import FAISS
-from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-import google.generativeai as genai
+
+# Use the new google.genai SDK (recommended)
 from google import genai
 from google.genai import types
-
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 logger = logging.getLogger("uvicorn.error")
@@ -32,8 +30,6 @@ CHUNK_OVERLAP = 50
 MAX_TOKENS = 1024
 TOP_K = 6
 PROMPT_CACHE_MAX_SIZE = 100
-
-
 
 # ── Environment ──────────────────────────────────────────────────────────────
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
@@ -53,7 +49,51 @@ GLOBAL_STATE = {
     "all_chunks": [],
 }
 
-# ── LLM ──────────────────────────────────────────────────────────────────────
+# ── Custom Gemini Embeddings (using google.genai) ─────────────────────────────
+class GeminiEmbeddings:
+    def __init__(self, model="gemini-embedding-2"):   # one of the available models
+        self.client = genai.Client(api_key=GOOGLE_API_KEY)
+        self.model = model
+
+    def embed_documents(self, texts):
+        result = []
+        for text in texts:
+            response = self.client.models.embed_content(
+                model=self.model,
+                contents=text,
+                config=types.EmbedContentConfig(task_type="retrieval_document"),
+            )
+            result.append(response.embeddings[0].values)
+        return result
+
+    def embed_query(self, text):
+        response = self.client.models.embed_content(
+            model=self.model,
+            contents=text,
+            config=types.EmbedContentConfig(task_type="retrieval_query"),
+        )
+        return response.embeddings[0].values
+
+# ── Custom Gemini Chat (using google.genai) ─────────────────────────────────
+class ChatGemini:
+    def __init__(self, model="gemini-1.5-flash", temperature=0.0, max_output_tokens=1024):
+        self.client = genai.Client(api_key=GOOGLE_API_KEY)
+        self.model = model
+        self.temperature = temperature
+        self.max_output_tokens = max_output_tokens
+
+    def invoke(self, prompt: str) -> str:
+        response = self.client.models.generate_content(
+            model=self.model,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                temperature=self.temperature,
+                max_output_tokens=self.max_output_tokens,
+            )
+        )
+        return response.text
+
+# ── LLM instance ─────────────────────────────────────────────────────────────
 llm = ChatGemini(
     model="gemini-1.5-flash",
     temperature=0.0,
@@ -81,47 +121,6 @@ class QueryResponse(BaseModel):
     answer: str
     source_chunks: List[str]
 
-class GeminiEmbeddings:
-    def __init__(self, model="gemini-embedding-2"):
-        genai.configure(api_key=GOOGLE_API_KEY)
-        self.model = model
-
-    def embed_documents(self, texts):
-        result = []
-        for text in texts:
-            response = genai.embed_content(
-                model=f"models/{self.model}",   # keep "models/" prefix
-                content=text,
-                task_type="retrieval_document"
-            )
-            result.append(response['embedding'])
-        return result
-
-    def embed_query(self, text):
-        response = genai.embed_content(
-            model=f"models/{self.model}",
-            content=text,
-            task_type="retrieval_query"
-        )
-        return response['embedding']
-class ChatGemini:
-    def __init__(self, model="gemini-1.5-flash", temperature=0.0, max_output_tokens=1024):
-        self.client = genai.Client(api_key=GOOGLE_API_KEY)
-        self.model = model
-        self.temperature = temperature
-        self.max_output_tokens = max_output_tokens
-
-    def invoke(self, prompt: str) -> str:
-        response = self.client.models.generate_content(
-            model=self.model,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                temperature=self.temperature,
-                max_output_tokens=self.max_output_tokens,
-            )
-        )
-        return response.text
-
 # ── Helpers ──────────────────────────────────────────────────────────────────
 def compute_hash(b: bytes) -> str:
     return hashlib.md5(b).hexdigest()
@@ -138,7 +137,7 @@ def llm_invoke(prompt: str) -> str:
     if p_hash in cache:
         return cache[p_hash]
     raw = llm.invoke(prompt)
-    result = strip_think_tags(str(raw.content))
+    result = strip_think_tags(raw)
     if len(cache) >= PROMPT_CACHE_MAX_SIZE:
         oldest_key = next(iter(cache))
         del cache[oldest_key]
@@ -166,39 +165,7 @@ def process_document(file_path: str, ext: str):
 
         GLOBAL_STATE["all_chunks"] = [chunk.page_content for chunk in chunks]
 
-        # ---- Custom embeddings using genai library directly ----
-        class CustomEmbeddings:
-            def __init__(self, api_key):
-                genai.configure(api_key=api_key)
-            
-            def embed_documents(self, texts):
-                embeddings = []
-                for text in texts:
-                    try:
-                        result = genai.embed_content(
-                            model="models/embedding-001",
-                            content=text
-                        )
-                        embeddings.append(result['embedding'])
-                    except Exception as e:
-                        logger.error(f"Embedding error for text: {str(e)}")
-                        raise
-                return embeddings
-            
-            def embed_query(self, text):
-                try:
-                    result = genai.embed_content(
-                        model="models/embedding-001",
-                        content=text
-                    )
-                    return result['embedding']
-                except Exception as e:
-                    logger.error(f"Query embedding error: {str(e)}")
-                    raise
-        
         embeddings = GeminiEmbeddings(model="gemini-embedding-2")
-        # ---------------------------------------------------------------
-
         vectorstore = FAISS.from_documents(chunks, embeddings)
         GLOBAL_STATE["retriever"] = vectorstore.as_retriever(search_kwargs={"k": TOP_K})
         GLOBAL_STATE["file_hash"] = compute_hash(open(file_path, "rb").read())
@@ -225,7 +192,6 @@ async def upload_file(file: UploadFile = File(...)):
     if ext not in (".csv", ".pdf"):
         raise HTTPException(status_code=400, detail="Only CSV or PDF allowed")
 
-    # Save to temp file
     with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
         content = await file.read()
         tmp.write(content)
@@ -234,7 +200,6 @@ async def upload_file(file: UploadFile = File(...)):
     try:
         process_document(tmp_path, ext)
     finally:
-        # Clean up temp file
         try:
             os.unlink(tmp_path)
         except:
@@ -308,19 +273,3 @@ async def reset_state():
 @app.get("/health")
 async def health():
     return {"status": "ok", "file_indexed": GLOBAL_STATE["filename"] is not None}
-
-@app.get("/health")
-async def health():
-    return {"status": "ok", "file_indexed": GLOBAL_STATE["filename"] is not None}
-
-# ── Test endpoint ─────────────────────────────────────────────────────────────
-@app.get("/list-models")
-async def list_models():
-    try:
-        genai.configure(api_key=GOOGLE_API_KEY)
-        models = genai.list_models()
-        # Filter for embedding models
-        embedding_models = [m.name for m in models if "embed" in m.name]
-        return {"available_embedding_models": embedding_models}
-    except Exception as e:
-        return {"error": str(e)}

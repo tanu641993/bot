@@ -7,6 +7,5 @@ langchain-community>=0.2.0
 pypdf>=4.0.0
 faiss-cpu>=1.8.0
 python-multipart>=0.0.9
-google-generativeai>=0.8.0
+google-genai>=0.2.0        # <-- new SDK
 langchain-text-splitters
-google-genai>=0.2.0
