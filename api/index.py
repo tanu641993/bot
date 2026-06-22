@@ -14,6 +14,8 @@ from langchain_community.document_loaders import CSVLoader, PyPDFLoader
 from langchain_community.vectorstores import FAISS
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+import google.generativeai as genai
+
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 logger = logging.getLogger("uvicorn.error")
@@ -72,6 +74,32 @@ class QueryResponse(BaseModel):
     answer: str
     source_chunks: List[str]
 
+class GeminiEmbeddings:
+    def __init__(self, model="text-embedding-004"):
+        genai.configure(api_key=GOOGLE_API_KEY)
+        self.model = model
+
+    def embed_documents(self, texts):
+        """Embed a list of texts."""
+        result = []
+        for text in texts:
+            response = genai.embed_content(
+                model=f"models/{self.model}",
+                content=text,
+                task_type="retrieval_document"
+            )
+            result.append(response['embedding'])
+        return result
+
+    def embed_query(self, text):
+        """Embed a single query."""
+        response = genai.embed_content(
+            model=f"models/{self.model}",
+            content=text,
+            task_type="retrieval_query"
+        )
+        return response['embedding']
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 def compute_hash(b: bytes) -> str:
     return hashlib.md5(b).hexdigest()
@@ -118,7 +146,7 @@ def process_document(file_path: str, ext: str):
         # Store all chunk texts for summarization
         GLOBAL_STATE["all_chunks"] = [chunk.page_content for chunk in chunks]
 
-        embeddings = GoogleGenerativeAIEmbeddings(model="text-embedding-004")
+        embeddings = GeminiEmbeddings(model="text-embedding-004")
         vectorstore = FAISS.from_documents(chunks, embeddings)
         GLOBAL_STATE["retriever"] = vectorstore.as_retriever(search_kwargs={"k": TOP_K})
         GLOBAL_STATE["file_hash"] = compute_hash(open(file_path, "rb").read())
