@@ -53,13 +53,15 @@ GLOBAL_STATE = {
 # ── Custom Gemini Embeddings (using google.genai) ─────────────────────────────
 class GeminiEmbeddings:
     def __init__(self, model="gemini-embedding-2"):
-        self.client = genai.Client(
-            api_key=GOOGLE_API_KEY,
-            http_options={'api_version': 'v1'}
-        )
+        self.client = genai.Client(api_key=GOOGLE_API_KEY, http_options={'api_version': 'v1'})
         self.model = model
 
+    def __call__(self, text):
+        """Make the instance callable – used by FAISS for query embeddings."""
+        return self.embed_query(text)
+
     def embed_documents(self, texts):
+        """Embed a list of documents."""
         result = []
         for text in texts:
             response = self.client.models.embed_content(
@@ -71,6 +73,7 @@ class GeminiEmbeddings:
         return result
 
     def embed_query(self, text):
+        """Embed a single query."""
         response = self.client.models.embed_content(
             model=self.model,
             contents=text,
