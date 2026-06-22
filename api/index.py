@@ -16,19 +16,6 @@ from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGener
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 import google.generativeai as genai
 
-@app.get("/test-embedding")
-async def test_embedding():
-    try:
-        genai.configure(api_key=GOOGLE_API_KEY)
-        response = genai.embed_content(
-            model="models/embedding-001",
-            content="Hello world",
-            task_type="retrieval_document"
-        )
-        return {"status": "success", "length": len(response['embedding'])}
-    except Exception as e:
-        return {"status": "error", "detail": str(e)}
-
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 logger = logging.getLogger("uvicorn.error")
@@ -273,3 +260,21 @@ async def reset_state():
 @app.get("/health")
 async def health():
     return {"status": "ok", "file_indexed": GLOBAL_STATE["filename"] is not None}
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "file_indexed": GLOBAL_STATE["filename"] is not None}
+
+# ── Test endpoint ─────────────────────────────────────────────────────────────
+@app.get("/test-embedding")
+async def test_embedding():
+    try:
+        genai.configure(api_key=GOOGLE_API_KEY)
+        response = genai.embed_content(
+            model="models/embedding-001",
+            content="Hello world",
+            task_type="retrieval_document"
+        )
+        return {"status": "success", "length": len(response['embedding'])}
+    except Exception as e:
+        return {"status": "error", "detail": str(e)}
