@@ -4,6 +4,7 @@ import re
 import tempfile
 from typing import List, Optional
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, BackgroundTasks
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 import pandas as pd
 
@@ -25,9 +26,9 @@ if not os.environ.get("GOOGLE_API_KEY"):
     raise ValueError("Missing GOOGLE_API_KEY environment variable.")
 
 # ── In-Memory Global State (Simulating Session State / Cache) ─────────────────
-# Note: For production with multiple users, replace these with Redis or DB storage.
 GLOBAL_STATE = {
     "file_hash": None,
+    "filename": None,
     "retriever": None,
     "prompt_cache": {},
 }
@@ -100,91 +101,109 @@ def process_document(file_path: str, ext: str):
 
 # ── API Endpoints ──────────────────────────────────────────────────────────────
 
-@app.post("/upload")
-async def upload_file(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
-    """Uploads file, validates extensions, and runs asynchronous vector creation."""
-    contents = await file.read()
-    current_hash = compute_hash(contents)
-    
-    # Avoid rebuilding index if it's the exact same file
-    if GLOBAL_STATE["file_hash"] == current_hash and GLOBAL_STATE["retriever"] is not None:
-        return {"message": "File already uploaded and indexed.", "file_hash": current_hash}
-    
-    ext = os.path.splitext(file.filename)[1].lower()
-    if ext not in [".csv", ".pdf"]:
-        raise HTTPException(status_code=400, detail="Only CSV and PDF files are supported.")
+@app.get("/", response_class=HTMLResponse)
+def home_interface():
+    """Renders a fully interactive HTML Chat UI directly on your root homepage."""
+    current_file = GLOBAL_STATE["filename"] or "No document indexed yet"
+    return f"""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Gemini RAG Assistant</title>
+        <style>
+            body {{ font-family: 'Segoe UI', system-ui, sans-serif; background-color: #f3f4f6; margin: 0; padding: 20px; display: flex; justify-content: center; }}
+            .app-card {{ width: 100%; max-width: 650px; background: white; border-radius: 16px; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1); padding: 30px; box-sizing: border-box; }}
+            h2 {{ margin-top: 0; color: #1e3a8a; display: flex; align-items: center; gap: 10px; font-size: 24px; }}
+            .file-box {{ background: #f8fafc; border: 2px dashed #cbd5e1; border-radius: 12px; padding: 20px; text-align: center; margin-bottom: 20px; transition: border 0.2s; }}
+            .file-box:hover {{ border-color: #3b82f6; }}
+            .status-badge {{ display: inline-block; background: #e0f2fe; color: #0369a1; padding: 4px 10px; border-radius: 20px; font-size: 13px; font-weight: 600; margin-top: 10px; }}
+            input[type="file"] {{ display: none; }}
+            .upload-btn {{ background: #3b82f6; color: white; border: none; padding: 10px 20px; border-radius: 8px; font-weight: 600; cursor: pointer; display: inline-block; margin-top: 5px; }}
+            .upload-btn:hover {{ background: #2563eb; }}
+            #chat-window {{ height: 350px; border: 1px solid #e2e8f0; border-radius: 12px; background: #fafafa; overflow-y: auto; padding: 15px; margin-bottom: 15px; display: flex; flex-direction: column; gap: 12px; }}
+            .bubble {{ max-width: 80%; padding: 10px 14px; border-radius: 12px; font-size: 15px; line-height: 1.4; word-wrap: break-word; }}
+            .bubble.user {{ background: #2563eb; color: white; align-self: flex-end; border-bottom-right-radius: 2px; }}
+            .bubble.bot {{ background: #e2e8f0; color: #1e293b; align-self: flex-start; border-bottom-left-radius: 2px; }}
+            .chat-controls {{ display: flex; gap: 10px; }}
+            .chat-controls input {{ flex: 1; padding: 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 15px; outline: none; }}
+            .chat-controls input:focus {{ border-color: #3b82f6; box-shadow: 0 0 0 2px rgba(59,130,246,0.2); }}
+            .chat-controls button {{ background: #1e3a8a; color: white; border: none; padding: 0 22px; border-radius: 8px; font-weight: bold; cursor: pointer; }}
+            .chat-controls button:hover {{ background: #172554; }}
+            .reset-link {{ display: block; text-align: center; color: #94a3b8; font-size: 13px; margin-top: 15px; text-decoration: none; cursor: pointer; }}
+            .reset-link:hover {{ color: #ef4444; }}
+        </style>
+    </head>
+    <body>
+        <div class="app-card">
+            <h2>🧠 Gemini RAG Data Assistant</h2>
+            
+            <div class="file-box">
+                <label class="upload-btn" for="file-picker">Choose CSV / PDF</label>
+                <input type="file" id="file-picker" accept=".csv,.pdf" onchange="handleFileUpload()">
+                <div id="filename-display" style="font-size: 14px; margin-top: 8px; color: #64748b;">Ready to process file</div>
+                <div><span class="status-badge" id="active-badge">{current_file}</span></div>
+            </div>
 
-    # Save to safe temporary directory
-    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-        tmp.write(contents)
-        tmp_path = tmp.name
+            <div id="chat-window">
+                <div class="bubble bot">Hello! Upload a data document above, and I'll answer your targeted queries using Gemini context retrieval.</div>
+            </div>
 
-    try:
-        process_document(tmp_path, ext)
-        GLOBAL_STATE["file_hash"] = current_hash
-        # Cleanup file after processing
-        background_tasks.add_task(clean_temp_file, tmp_path)
-    except Exception as e:
-        background_tasks.add_task(clean_temp_file, tmp_path)
-        raise HTTPException(status_code=500, detail=f"Failed to index document: {str(e)}")
+            <div class="chat-controls">
+                <input type="text" id="query-field" placeholder="Ask a question about the document..." onkeydown="if(event.key === 'Enter') sendQuery()">
+                <button onclick="sendQuery()">Ask</button>
+            </div>
+            
+            <span class="reset-link" onclick="resetApp()">Wipe vector state session cache</span>
+        </div>
 
-    return {"message": f"Successfully indexed {file.filename}", "file_hash": current_hash}
+        <script>
+            let localHistory = [];
 
+            async function handleFileUpload() {{
+                const picker = document.getElementById('file-picker');
+                if(!picker.files.length) return;
+                
+                const file = picker.files[0];
+                document.getElementById('filename-display').innerText = `Uploading: ${{file.name}}...`;
+                
+                const formData = new FormData();
+                formData.append('file', file);
+                
+                try {{
+                    const response = await fetch('/upload', {{ method: 'POST', body: formData }});
+                    const data = await response.json();
+                    if(response.ok) {{
+                        document.getElementById('active-badge').innerText = file.name;
+                        document.getElementById('filename-display').innerText = "Processing finished successfully!";
+                        appendBubble("bot", `Successfully processed and vector indexed **${{file.name}}**. Let me know what you would like to find out!`);
+                    }} else {{
+                        throw new Error(data.detail || "Upload error");
+                    }}
+                }} catch(err) {{
+                    document.getElementById('filename-display').innerText = "Upload sequence broke down.";
+                    alert(err.message);
+                }}
+            }}
 
-@app.post("/query", response_model=QueryResponse)
-async def query_rag(request: QueryRequest):
-    """Executes RAG pipeline against the active document context."""
-    if not GLOBAL_STATE["retriever"]:
-        raise HTTPException(status_code=400, detail="No active document. Please upload a file first.")
-
-    # Fetch context documents
-    docs = GLOBAL_STATE["retriever"].get_relevant_documents(request.question)
-    if not docs:
-        return QueryResponse(
-            answer="I could not find relevant information in the uploaded document.", 
-            source_chunks=[]
-        )
-
-    # Format retrieved document context
-    context = "\n\n---\n\n".join(
-        f"[Chunk {i+1}]\n{d.page_content}" for i, d in enumerate(docs)
-    )
-    
-    # Format chat history array (limiting to the last 4 elements)
-    history = "\n".join(
-        f"User: {h.user}\nAssistant: {h.assistant}"
-        for h in request.chat_history[-4:]
-    ) or "None"
-
-    prompt = f"""You are a helpful assistant that answers questions strictly from the provided document context.
-
-RULES:
-- Answer ONLY from the context below. Do NOT use outside knowledge.
-- If the answer is not in the context, say exactly: "The document does not contain information about this."
-- Be concise and direct. Quote or reference the relevant chunk when useful.
-- Never make up names, numbers, or facts.
-
---- DOCUMENT CONTEXT START ---
-{context}
---- DOCUMENT CONTEXT END ---
-
-Conversation so far:
-{history}
-
-Question: {question}
-
-Answer:"""
-
-    answer = llm_invoke(prompt)
-    source_chunks = [d.page_content for d in docs]
-    
-    return QueryResponse(answer=answer, source_chunks=source_chunks)
-
-
-@app.post("/reset")
-async def reset_state():
-    """Wipes memory session cache."""
-    GLOBAL_STATE["file_hash"] = None
-    GLOBAL_STATE["retriever"] = None
-    GLOBAL_STATE["prompt_cache"] = {}
-    return {"message": "State reset successfully."}
+            async function sendQuery() {{
+                const field = document.getElementById('query-field');
+                const text = field.value.trim();
+                if(!text) return;
+                
+                field.value = '';
+                appendBubble("user", text);
+                
+                try {{
+                    const response = await fetch('/query', {{
+                        method: 'POST',
+                        headers: {{ 'Content-Type': 'application/json' }},
+                        body: JSON.stringify({{ question: text, chat_history: localHistory }})
+                    }});
+                    const data = await response.json();
+                    
+                    if(response.ok) {{
+                        appendBubble("bot", data.answer);
+                        localHistory.push({{ user: text, assistant: data.answer }});
+                    }} else {{
