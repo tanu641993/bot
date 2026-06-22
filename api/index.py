@@ -225,20 +225,26 @@ async def query_rag(request: QueryRequest):
         raise HTTPException(status_code=400, detail="Question cannot be empty.")
 
     try:
+        # Retrieve relevant documents
         docs = GLOBAL_STATE["retriever"].invoke(request.question)
         if not docs:
             raise HTTPException(status_code=404, detail="No relevant documents found.")
+        
+        # Build context from retrieved docs
         context = "\n\n".join([doc.page_content for doc in docs])
         source_chunks = [doc.page_content[:200] + "..." for doc in docs]
+        
+        # Prompt with context (NOT full_text)
         prompt = f"""
-        Provide a comprehensive and detailed summary of the following document. 
-        Include the main points, key findings, important details, and any conclusions. 
-        Organize the summary with clear sections if appropriate.
-
-        Document:
-        {full_text}
-
-        Detailed Summary:
+        Answer the user's question using ONLY the context provided below.
+        If the answer is not in the context, say "I don't have that information."
+        
+        Context:
+        {context}
+        
+        Question: {request.question}
+        
+        Answer:
         """
         answer = llm_invoke(prompt)
         return QueryResponse(answer=answer, source_chunks=source_chunks)
