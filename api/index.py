@@ -1,6 +1,9 @@
 import hashlib
 import logging
 import os
+
+os.environ["GOOGLE_API_VERSION"] = "v1"   # <-- force v1 endpoint
+
 import re
 import tempfile
 from pathlib import Path
@@ -15,6 +18,8 @@ from langchain_community.vectorstores import FAISS
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 
 # ── Logging ──────────────────────────────────────────────────────────────────
@@ -28,7 +33,7 @@ MAX_TOKENS = 1024
 TOP_K = 6
 PROMPT_CACHE_MAX_SIZE = 100
 
-os.environ["GOOGLE_API_VERSION"] = "v1"   # <-- force v1 endpoint
+
 
 # ── Environment ──────────────────────────────────────────────────────────────
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
@@ -49,7 +54,7 @@ GLOBAL_STATE = {
 }
 
 # ── LLM ──────────────────────────────────────────────────────────────────────
-llm = ChatGoogleGenerativeAI(
+llm = ChatGemini(
     model="gemini-1.5-flash",
     temperature=0.0,
     max_output_tokens=MAX_TOKENS,
@@ -99,6 +104,23 @@ class GeminiEmbeddings:
             task_type="retrieval_query"
         )
         return response['embedding']
+class ChatGemini:
+    def __init__(self, model="gemini-1.5-flash", temperature=0.0, max_output_tokens=1024):
+        self.client = genai.Client(api_key=GOOGLE_API_KEY)
+        self.model = model
+        self.temperature = temperature
+        self.max_output_tokens = max_output_tokens
+
+    def invoke(self, prompt: str) -> str:
+        response = self.client.models.generate_content(
+            model=self.model,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                temperature=self.temperature,
+                max_output_tokens=self.max_output_tokens,
+            )
+        )
+        return response.text
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 def compute_hash(b: bytes) -> str:
