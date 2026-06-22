@@ -215,26 +215,8 @@ async def upload_file(
 # Let's redefine it here (override the previous one) but keep the core logic.
 # I'll rename it to process_and_cleanup and use it in background_tasks.
 
-def process_and_cleanup(file_path: str, ext: str):
-    """
-    Wraps process_document and ensures the temporary file is removed.
-    """
-    try:
-        process_document(file_path, ext)
-    except Exception as e:
-        logger.error(f"Processing failed: {e}")
-        # re-raise to be caught by the background task? We'll just log.
-    finally:
-        try:
-            os.unlink(file_path)
-            logger.debug(f"Deleted temporary file {file_path}")
-        except Exception as e:
-            logger.warning(f"Could not delete temp file {file_path}: {e}")
-
-# Now update the upload endpoint to use this new function
 @app.post("/upload")
 async def upload_file(
-    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
 ):
     if not file.filename:
@@ -245,16 +227,28 @@ async def upload_file(
         raise HTTPException(status_code=400, detail="Only CSV or PDF files are allowed.")
 
     try:
+        # Save uploaded file to a temporary location
         with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
             content = await file.read()
             tmp.write(content)
             tmp_path = tmp.name
 
-        background_tasks.add_task(process_and_cleanup, tmp_path, ext)
+        # Process the document synchronously
+        process_document(tmp_path, ext)
+
+        # Delete the temp file after processing
+        try:
+            os.unlink(tmp_path)
+        except:
+            pass
+
         return {
-            "message": "File uploaded. Indexing started in the background.",
+            "message": "File uploaded and indexed successfully.",
             "filename": file.filename,
         }
+
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Upload failed")
         raise HTTPException(status_code=500, detail=f"Upload error: {str(e)}")
