@@ -330,6 +330,7 @@
         <input type="file" id="fileInput" accept=".csv,.pdf" />
         <span class="file-name" id="uploadedFileName">No file selected</span>
         <button class="reset-btn" id="resetBtn">♻️ Reset</button>
+        <button class="reset-btn" id="summaryBtn" style="margin-left: 8px;">📄 Summary</button>
     </div>
 
     <!-- Chat Messages -->
@@ -492,6 +493,21 @@
                 }
             } catch (err) {
                 addMessage(`❌ Reset error: ${err.message}`, 'bot');
+            }
+        });
+
+        // Summary button
+        document.getElementById('summaryBtn').addEventListener('click', async function() {
+            try {
+                const resp = await fetch('/summary');
+                const data = await resp.json();
+                if (resp.ok) {
+                    addMessage(`📝 Summary:\n\n${data.summary}`, 'bot');
+                } else {
+                    throw new Error(data.detail || 'Summary failed');
+                }
+            } catch (err) {
+                addMessage(`❌ Summary error: ${err.message}`, 'bot');
             }
         });
 

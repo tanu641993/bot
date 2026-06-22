@@ -9,6 +9,8 @@ from typing import List, Optional
 from fastapi import FastAPI, HTTPException, UploadFile, File, BackgroundTasks
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
+from fastapi.responses import JSONResponse
+from typing import List
 
 # LangChain & vector store
 from langchain_community.document_loaders import CSVLoader, PyPDFLoader
@@ -56,6 +58,7 @@ GLOBAL_STATE = {
     "filename": None,
     "retriever": None,
     "prompt_cache": {},
+    "all_chunks": [],
 }
 
 # ── Initialize Gemini LLM ─────────────────────────────────────────────────────
@@ -142,6 +145,7 @@ def process_document(file_path: str, ext: str):
         GLOBAL_STATE["retriever"] = vectorstore.as_retriever(search_kwargs={"k": TOP_K})
         GLOBAL_STATE["file_hash"] = compute_hash(open(file_path, "rb").read())
         GLOBAL_STATE["filename"] = Path(file_path).name
+        GLOBAL_STATE["all_chunks"] = [chunk.page_content for chunk in chunks]  # store only text
         logger.info(f"Successfully indexed {len(chunks)} chunks from {GLOBAL_STATE['filename']}")
 
     except Exception as e:
@@ -315,6 +319,49 @@ async def reset_state():
     GLOBAL_STATE["prompt_cache"].clear()
     logger.info("State reset")
     return {"message": "State reset successfully."}
+
+@app.get("/summary")
+async def get_summary():
+    """
+    Generate a concise summary of the entire indexed document.
+    """
+    if not GLOBAL_STATE["all_chunks"]:
+        raise HTTPException(status_code=400, detail="No document has been indexed yet.")
+
+    # Combine all chunks into one text (with separators)
+    full_text = "\n\n".join(GLOBAL_STATE["all_chunks"])
+    
+    # If the text is short enough, summarise directly
+    if len(full_text) < 12000:   # approx 3000 tokens (safe for Gemini 1.5 Flash)
+        prompt = f"Summarize the following document concisely:\n\n{full_text}\n\nSummary:"
+        summary = llm_invoke(prompt)
+        return {"summary": summary}
+    
+    # Otherwise, use a simple map‑reduce
+    # Split the full text into overlapping segments
+    segment_size = 3000  # characters
+    overlap = 200
+    segments = []
+    start = 0
+    while start < len(full_text):
+        end = start + segment_size
+        segments.append(full_text[start:end])
+        start = end - overlap
+    
+    # Summarise each segment
+    segment_summaries = []
+    for i, seg in enumerate(segments):
+        prompt = f"Summarize this part of a document (part {i+1} of {len(segments)}):\n\n{seg}\n\nSummary:"
+        seg_summary = llm_invoke(prompt)
+        segment_summaries.append(seg_summary)
+    
+    # Combine all segment summaries and summarise again
+    combined = "\n\n".join(segment_summaries)
+    final_prompt = f"Combine the following summaries into one overall summary of the full document:\n\n{combined}\n\nOverall summary:"
+    final_summary = llm_invoke(final_prompt)
+    
+    return {"summary": final_summary}
+
 
 # ── Health Check (optional) ──────────────────────────────────────────────────
 @app.get("/health")
