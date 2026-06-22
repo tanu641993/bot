@@ -102,7 +102,7 @@ class ChatGemini:
 
 # ── LLM instance ─────────────────────────────────────────────────────────────
 llm = ChatGemini(
-    model="gemini-1.5-flash",
+    model="gemini-2.5-flash",   # pick one from the list
     temperature=0.0,
     max_output_tokens=MAX_TOKENS,
 )
