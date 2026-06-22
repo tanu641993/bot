@@ -28,7 +28,7 @@ logger.setLevel(logging.INFO)
 # ── Configuration ──────────────────────────────────────────────────────────────
 CHUNK_SIZE = 500
 CHUNK_OVERLAP = 50
-MAX_TOKENS = 1024
+MAX_TOKENS = 4096
 TOP_K = 6
 PROMPT_CACHE_MAX_SIZE = 100
 
@@ -80,7 +80,7 @@ class GeminiEmbeddings:
 
 # ── Custom Gemini Chat (using google.genai) ─────────────────────────────────
 class ChatGemini:
-    def __init__(self, model="gemini-1.5-flash", temperature=0.0, max_output_tokens=1024):
+    def __init__(self, model="gemini-2.5-flash", temperature=0.0, max_output_tokens=1024):
         self.client = genai.Client(
             api_key=GOOGLE_API_KEY,
             http_options={'api_version': 'v1'}   # force v1
@@ -227,7 +227,16 @@ async def query_rag(request: QueryRequest):
             raise HTTPException(status_code=404, detail="No relevant documents found.")
         context = "\n\n".join([doc.page_content for doc in docs])
         source_chunks = [doc.page_content[:200] + "..." for doc in docs]
-        prompt = f"Answer using only the context. If not present, say 'I don't know'.\n\nContext:\n{context}\n\nQuestion: {request.question}\n\nAnswer:"
+        prompt = f"""
+        Provide a comprehensive and detailed summary of the following document. 
+        Include the main points, key findings, important details, and any conclusions. 
+        Organize the summary with clear sections if appropriate.
+
+        Document:
+        {full_text}
+
+        Detailed Summary:
+        """
         answer = llm_invoke(prompt)
         return QueryResponse(answer=answer, source_chunks=source_chunks)
     except HTTPException:
@@ -243,7 +252,13 @@ async def get_summary():
 
     full_text = "\n\n".join(GLOBAL_STATE["all_chunks"])
     if len(full_text) < 12000:
-        prompt = f"Summarize the following document concisely:\n\n{full_text}\n\nSummary:"
+        prompt = f"""
+        Summarize this part of the document in detail, capturing all essential information (part {i+1} of {len(segments)}):
+
+        {seg}
+
+        Detailed summary of this part:
+        """
         summary = llm_invoke(prompt)
         return {"summary": summary}
 
@@ -264,7 +279,14 @@ async def get_summary():
         segment_summaries.append(seg_summary)
 
     combined = "\n\n".join(segment_summaries)
-    final_prompt = f"Combine these summaries into one overall summary:\n\n{combined}\n\nOverall summary:"
+    final_prompt = f"""
+    Combine the following detailed summaries into one comprehensive overall summary of the entire document. 
+    Make it cohesive and well-structured.
+
+    {combined}
+
+    Overall detailed summary:
+    """
     final_summary = llm_invoke(final_prompt)
     return {"summary": final_summary}
 
