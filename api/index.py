@@ -118,11 +118,37 @@ def process_document(file_path: str, ext: str):
 
         GLOBAL_STATE["all_chunks"] = [chunk.page_content for chunk in chunks]
 
-        # ---- Use GoogleGenerativeAIEmbeddings with correct model ----
-        embeddings = GoogleGenerativeAIEmbeddings(
-            model="models/text-embedding-004",
-            google_api_key=GOOGLE_API_KEY
-        )
+        # ---- Custom embeddings using genai library directly ----
+        class CustomEmbeddings:
+            def __init__(self, api_key):
+                genai.configure(api_key=api_key)
+            
+            def embed_documents(self, texts):
+                embeddings = []
+                for text in texts:
+                    try:
+                        result = genai.embed_content(
+                            model="models/embedding-001",
+                            content=text
+                        )
+                        embeddings.append(result['embedding'])
+                    except Exception as e:
+                        logger.error(f"Embedding error for text: {str(e)}")
+                        raise
+                return embeddings
+            
+            def embed_query(self, text):
+                try:
+                    result = genai.embed_content(
+                        model="models/embedding-001",
+                        content=text
+                    )
+                    return result['embedding']
+                except Exception as e:
+                    logger.error(f"Query embedding error: {str(e)}")
+                    raise
+        
+        embeddings = CustomEmbeddings(GOOGLE_API_KEY)
         # ---------------------------------------------------------------
 
         vectorstore = FAISS.from_documents(chunks, embeddings)
