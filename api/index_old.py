@@ -43,7 +43,7 @@ GLOBAL_STATE = {
     "filename": None,
     "retriever": None,
     "prompt_cache": {},
-    "all_chunks": [],
+    "all_chunks": [],          # <-- important
 }
 
 # ── LLM ──────────────────────────────────────────────────────────────────────
@@ -73,6 +73,32 @@ class QueryRequest(BaseModel):
 class QueryResponse(BaseModel):
     answer: str
     source_chunks: List[str]
+
+class GeminiEmbeddings:
+    def __init__(self, model="embedding-001"):   # <-- changed default
+        genai.configure(api_key=GOOGLE_API_KEY)
+        self.model = model
+
+    def embed_documents(self, texts):
+        """Embed a list of texts."""
+        result = []
+        for text in texts:
+            response = genai.embed_content(
+                model=f"models/{self.model}",
+                content=text,
+                task_type="retrieval_document"
+            )
+            result.append(response['embedding'])
+        return result
+
+    def embed_query(self, text):
+        """Embed a single query."""
+        response = genai.embed_content(
+            model=f"models/{self.model}",
+            content=text,
+            task_type="retrieval_query"
+        )
+        return response['embedding']
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 def compute_hash(b: bytes) -> str:
@@ -118,12 +144,9 @@ def process_document(file_path: str, ext: str):
 
         GLOBAL_STATE["all_chunks"] = [chunk.page_content for chunk in chunks]
 
-        # ---- Use GoogleGenerativeAIEmbeddings with correct model ----
-        embeddings = GoogleGenerativeAIEmbeddings(
-            model="models/text-embedding-004",
-            google_api_key=GOOGLE_API_KEY
-        )
-        # ---------------------------------------------------------------
+        # ---- Use custom embeddings ----
+        embeddings = GeminiEmbeddings(model="embedding-001")
+        # ---------------------------------
 
         vectorstore = FAISS.from_documents(chunks, embeddings)
         GLOBAL_STATE["retriever"] = vectorstore.as_retriever(search_kwargs={"k": TOP_K})
