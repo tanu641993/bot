@@ -251,18 +251,23 @@ async def get_summary():
         raise HTTPException(status_code=400, detail="No document has been indexed yet.")
 
     full_text = "\n\n".join(GLOBAL_STATE["all_chunks"])
+    
+    # For short documents, summarise directly with a detailed prompt
     if len(full_text) < 12000:
         prompt = f"""
-        Summarize this part of the document in detail, capturing all essential information (part {i+1} of {len(segments)}):
+        Provide a comprehensive and detailed summary of the following document. 
+        Include the main points, key findings, important details, and any conclusions. 
+        Organize the summary with clear sections if appropriate.
 
-        {seg}
+        Document:
+        {full_text}
 
-        Detailed summary of this part:
+        Detailed Summary:
         """
         summary = llm_invoke(prompt)
         return {"summary": summary}
 
-    # Map-reduce for longer documents
+    # For longer documents, use map‑reduce
     segment_size = 3000
     overlap = 200
     segments = []
@@ -273,8 +278,15 @@ async def get_summary():
         start = end - overlap
 
     segment_summaries = []
+    # Iterate over segments with index i
     for i, seg in enumerate(segments):
-        prompt = f"Summarize this part (part {i+1} of {len(segments)}):\n\n{seg}\n\nSummary:"
+        prompt = f"""
+        Summarize this part of the document in detail, capturing all essential information (part {i+1} of {len(segments)}):
+
+        {seg}
+
+        Detailed summary of this part:
+        """
         seg_summary = llm_invoke(prompt)
         segment_summaries.append(seg_summary)
 
