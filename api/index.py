@@ -159,6 +159,28 @@ def process_document(file_path: str, ext: str):
     logger.info(f"Processing {file_path} with extension {ext}")
     try:
         if ext == ".csv":
+        import csv
+        with open(file_path, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+        if not rows:
+            raise HTTPException(status_code=400, detail="CSV is empty.")
+
+        # Group rows into blocks of 20 rows each
+        block_size = 20
+        docs = []
+        for i in range(0, len(rows), block_size):
+            block = rows[i:i+block_size]
+            # Convert block to a text block
+            text = f"Rows {i+1} to {min(i+block_size, len(rows))}:\n"
+            for row in block:
+                text += ", ".join(f"{col}: {val}" for col, val in row.items()) + "\n"
+            # Create a Document object
+            class Doc:
+                def __init__(self, page_content, metadata):
+                    self.page_content = page_content
+                    self.metadata = metadata
+            docs.append(Doc(text, {"source": "CSV", "row_start": i+1}))
             docs = CSVLoader(file_path=file_path).load()
         elif ext == ".pdf":
             try:
