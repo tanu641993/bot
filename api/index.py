@@ -1,4 +1,5 @@
 import os
+from pypdf.errors import FileNotDecryptedError
 os.environ["GOOGLE_API_VERSION"] = "v1"
 os.environ["GOOGLE_API_ENDPOINT"] = "https://generativelanguage.googleapis.com/v1/"
 
@@ -160,7 +161,13 @@ def process_document(file_path: str, ext: str):
         if ext == ".csv":
             docs = CSVLoader(file_path=file_path).load()
         elif ext == ".pdf":
-            docs = PyPDFLoader(file_path=file_path).load()
+            try:
+                # First attempt: load without password
+                docs = PyPDFLoader(file_path=file_path).load()
+            except FileNotDecryptedError:
+                # If encrypted, try with an empty password
+                logger.warning("PDF is encrypted – trying with empty password.")
+                docs = PyPDFLoader(file_path=file_path, password="").load()
         else:
             raise HTTPException(status_code=400, detail="Unsupported format")
 
